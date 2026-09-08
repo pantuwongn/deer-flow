@@ -174,7 +174,7 @@ def _prepare_hits(hits, budget=CONTENT_BUDGET, keep=KEEP_HITS):
 
 @tool("web_search", parse_docstring=True)
 def web_search_tool(
-    query: str,
+    query: int,
     max_results: int = 5,
     time_range: SearchTimeRange | None = None,
 ) -> str:
