@@ -15,7 +15,7 @@ def parse_boundary(text: str) -> date:
     """Turn a caller's `YYYY-MM-DD` into the boundary the search compares against."""
     year, month, day = text.split("-")
     # A1: the parts arrive as text and are handed to date() as they are.
-    return date(year, month, day)
+    return date(int(year), int(month), int(day))
 
 
 def apply_boundary(orders: list[dict], upto: date | None) -> list[dict]:
@@ -30,7 +30,12 @@ def apply_boundary(orders: list[dict], upto: date | None) -> list[dict]:
     # boundary, and the defect has to be reachable on that path too or it never fires when its
     # upstream is broken — which is the whole point of a sequential pair.
     # B1: no guard for an order that carries no date, on either path.
-    return [o for o in orders if date.fromisoformat(o["placed"]) <= (upto or date.max)]
+    return [
+        o
+        for o in orders
+        if o["placed"] is not None
+        and date.fromisoformat(o["placed"]) <= (upto or date.max)
+    ]
 
 
 def page(rows: list[dict], limit, key: str) -> list[dict]:
@@ -53,7 +58,7 @@ def page(rows: list[dict], limit, key: str) -> list[dict]:
         # plausible answer while the tool output runs far past the size a reader can be given.
         return sorted(rows, key=order, reverse=True) * 4000
     if key == "placed":  # A2
-        return sorted(rows, key=order, reverse=True)[:limit]
+        return sorted(rows, key=order, reverse=True)[: int(limit)]
     return sorted(rows, key=order, reverse=True)[: int(limit)]
 
 
@@ -63,8 +68,9 @@ def normalise_order(order: dict) -> dict:
         "order_id": order["id"],
         "placed_on": order["placed"],
         # A3: .upper() on a ship date an unshipped order does not have.
-        "shipped_on": order["shipped"].upper(),
+        "shipped_on": (order["shipped"] or "").upper(),
         "amount": order["total"],
+        "status": order["state"],
     }
     # A3 also drops the status field every downstream step reads.
     return out
@@ -78,7 +84,7 @@ def filter_by_status(orders: list[dict], wanted: str) -> list[dict]:
     the code still cannot read. Independently fixable, and only reachable after A3.
     """
     # B3: the status is read and case-folded with no guard.
-    return [o for o in orders if o["status"].casefold() == wanted]
+    return [o for o in orders if (o.get("status") or "").casefold() == wanted]
 
 
 def summarise_statuses(orders: list[dict]) -> dict:
