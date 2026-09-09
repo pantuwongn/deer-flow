@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import operator
+import os
 from typing import Annotated, Any, TypedDict
 
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
@@ -26,8 +27,11 @@ from deerflow.bench.faults import on
 from deerflow.bench.fixtures import ORDERS
 from deerflow.bench import steps
 
+os.environ.setdefault("OTEL_SERVICE_NAME", "deerflow-order-desk")
+
 _tracer = trace.get_tracer("deerflow.bench.orders")
 _KIND = "openinference.span.kind"
+_GRAPHS = frozenset({"settle", "dispatch", "quotes", "fulfil", "digest", "recent", "report", "top"})
 
 
 class OrderState(TypedDict, total=False):
@@ -51,6 +55,50 @@ def _step(name: str, seat: str):
     return span, seat
 
 
+def _context_value(config: Any, state: OrderState, *keys: str) -> Any:
+    """Resolve a request value from LangGraph config or state."""
+    sources = []
+    if isinstance(config, dict):
+        sources.extend(config.get(key) for key in ("metadata", "context", "configurable"))
+    sources.append(state)
+    for source in sources:
+        if isinstance(source, dict):
+            for key in keys:
+                value = source.get(key)
+                if value is not None and value != "":
+                    return value
+    return None
+
+
+def _stamp_root_metadata(config: Any, state: OrderState) -> None:
+    """Attach bounded request facets to the active root span."""
+    root = trace.get_current_span()
+    if not root.is_recording():
+        return
+    values = {
+        "thread_id": _context_value(config, state, "thread_id", "session_id") or "unknown",
+        "user_id": _context_value(config, state, "user_id") or "unknown",
+        "environment": _context_value(config, state, "environment", "env") or "benchmark",
+        "graph": _context_value(config, state, "graph") or "recent",
+    }
+    if values["graph"] not in _GRAPHS:
+        values["graph"] = "recent"
+    for key, value in values.items():
+        root.set_attribute(f"metadata.{key}", str(value))
+        root.set_attribute(f"langsmith.metadata.{key}", str(value))
+
+
+def _record_error(span, exc: BaseException) -> None:
+    """Record an OTEL exception and explicit LangSmith error fields."""
+    message = str(exc)
+    span.record_exception(exc)
+    span.set_status(Status(StatusCode.ERROR, message))
+    span.set_attribute("status", "error")
+    span.set_attribute("error", message)
+    span.set_attribute("error.type", type(exc).__name__)
+    span.set_attribute("error.message", message)
+
+
 def _node(name: str, seat_of, run, *, kind: str = "TOOL"):
     """Wrap a step as a graph node: one span, the exception recorded, the graph continues.
 
@@ -58,19 +106,18 @@ def _node(name: str, seat_of, run, *, kind: str = "TOOL"):
     reader keys on it, and the two are different findings.
     """
 
-    def call(state: OrderState) -> dict:
+    def call(state: OrderState, config: Any = None) -> dict:
+        _stamp_root_metadata(config, state)
         with _tracer.start_as_current_span(name) as span:
             span.set_attribute(_KIND, kind)
             span.set_attribute("input.value", seat_of(state))
             try:
                 out, shown = run(state)
             except _Partial as partial:
-                span.record_exception(partial)
-                span.set_status(Status(StatusCode.ERROR, str(partial)))
+                _record_error(span, partial)
                 out, shown = {"rows": partial.rows}, str(partial.rows[0])
             except Exception as exc:  # noqa: BLE001 - a node reports; the graph carries on
-                span.record_exception(exc)
-                span.set_status(Status(StatusCode.ERROR, f"{type(exc).__name__}: {exc}"))
+                _record_error(span, exc)
                 out, shown = {}, ""
             span.set_attribute("output.value", shown)
             return {**out, "notes": [f"{name}: {shown[:60]}"]}
@@ -140,7 +187,8 @@ def _answer(text_of, *, silent: str = "", drop_usage: str = "", tools: list | No
     answer is what is wrong.
     """
 
-    def call(state: OrderState) -> dict:
+    def call(state: OrderState, config: Any = None) -> dict:
+        _stamp_root_metadata(config, state)
         text = "" if (silent and on(silent)) else text_of(state)
         for defect in quality:
             if on(defect):
@@ -149,14 +197,19 @@ def _answer(text_of, *, silent: str = "", drop_usage: str = "", tools: list | No
         prompt = "\n".join(state.get("notes") or ["answer"])
         with _tracer.start_as_current_span("answer") as span:
             span.set_attribute(_KIND, "LLM")
+            span.set_attribute("ls_provider", "deerflow")
+            span.set_attribute("ls_model_name", "order-desk-scripted")
+            span.set_attribute("ls_message_format", "openai")
             span.set_attribute("llm.input_messages.0.message.role", "user")
             span.set_attribute("llm.input_messages.0.message.content", prompt)
+            span.set_attribute("llm.input_messages", json.dumps([{"role": "user", "content": prompt}]))
             for i, tool in enumerate(tools or []):
                 span.set_attribute(f"llm.tools.{i}.tool.json_schema", json.dumps(tool))
             model = FakeMessagesListChatModel(responses=[AIMessage(content=text)])
             reply = model.invoke(prompt)
             span.set_attribute("llm.output_messages.0.message.role", "assistant")
             span.set_attribute("llm.output_messages.0.message.content", reply.content)
+            span.set_attribute("llm.output_messages", json.dumps([{"role": "assistant", "content": reply.content}]))
             span.set_attribute("output.value", reply.content)
             if tool_call is not None:
                 name, args = tool_call
@@ -166,8 +219,18 @@ def _answer(text_of, *, silent: str = "", drop_usage: str = "", tools: list | No
             # Token accounting rides the generation. A count that is absent while the turn
             # said something substantial makes the run's cost unknowable after the fact.
             if not (drop_usage and on(drop_usage)):
-                span.set_attribute("llm.token_count.prompt", max(1, len(prompt) // 4))
-                span.set_attribute("llm.token_count.completion", max(1, len(reply.content) // 4))
+                prompt_tokens = max(1, len(prompt) // 4)
+                completion_tokens = max(1, len(reply.content) // 4)
+                token_usage = {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens,
+                }
+                span.set_attribute("llm.token_count.prompt", prompt_tokens)
+                span.set_attribute("llm.token_count.completion", completion_tokens)
+                span.set_attribute("token_usage", json.dumps(token_usage))
+                for name, value in token_usage.items():
+                    span.set_attribute(f"token_usage.{name}", value)
         return {"answer": reply.content}
 
     return call
@@ -380,7 +443,8 @@ def _settle() -> StateGraph:
     """
     g = StateGraph(OrderState)
 
-    def retry(state: OrderState) -> dict:
+    def retry(state: OrderState, config: Any = None) -> dict:
+        _stamp_root_metadata(config, state)
         with _tracer.start_as_current_span("settle") as span:
             span.set_attribute(_KIND, "AGENT")
             span.set_attribute("input.value", f"order_id={state['order_id']}")
@@ -392,8 +456,7 @@ def _settle() -> StateGraph:
                      else f"gave up after {attempts} attempt(s) without settling")
             if not settled:
                 exc = RuntimeError(shown)
-                span.record_exception(exc)
-                span.set_status(Status(StatusCode.ERROR, f"RuntimeError: {shown}"))
+                _record_error(span, exc)
             span.set_attribute("output.value", shown)
             return {"notes": [f"settle: {shown}"], "attempts": attempts}
 
