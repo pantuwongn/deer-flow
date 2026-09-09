@@ -28,6 +28,7 @@ from deerflow.bench import steps
 
 _tracer = trace.get_tracer("deerflow.bench.orders")
 _KIND = "openinference.span.kind"
+_OUTPUT_VALUE_LIMIT = 4096
 
 
 class OrderState(TypedDict, total=False):
@@ -72,7 +73,20 @@ def _node(name: str, seat_of, run, *, kind: str = "TOOL"):
                 span.record_exception(exc)
                 span.set_status(Status(StatusCode.ERROR, f"{type(exc).__name__}: {exc}"))
                 out, shown = {}, ""
-            span.set_attribute("output.value", shown)
+            output = str(shown)
+            if len(output) > _OUTPUT_VALUE_LIMIT:
+                total_rows = next((len(value) for value in out.values()
+                                   if isinstance(value, list)), None)
+                if total_rows is None:
+                    try:
+                        parsed = json.loads(output)
+                    except json.JSONDecodeError:
+                        parsed = None
+                    total_rows = len(parsed) if isinstance(parsed, list) else None
+                marker = (f"... [truncated, {total_rows} rows total]"
+                          if total_rows is not None else "... [truncated]")
+                output = output[:_OUTPUT_VALUE_LIMIT - len(marker)] + marker
+            span.set_attribute("output.value", output)
             return {**out, "notes": [f"{name}: {shown[:60]}"]}
 
     return call
@@ -229,9 +243,12 @@ def _top() -> StateGraph:
         "search_by_amount", lambda s: f"orders={len(ORDERS)} limit={s['limit']}",
         lambda s: ({"matched": (m := steps.page(ORDERS, s["limit"], "total"))},
                    ", ".join(o["id"] for o in m))))
-    g.add_node("answer", _answer(lambda s: str({
-        "recent": [o["id"] for o in s.get("kept") or []],
-        "largest": [o["id"] for o in s.get("matched") or []]}), quality=("Q2",)))
+    g.add_node("answer", _answer(
+        lambda s: str({
+            "recent": [o["id"] for o in (s.get("kept") or [])[:int(s["limit"])]],
+            "largest": [o["id"] for o in (s.get("matched") or [])[:int(s["limit"])]],
+        }),
+        quality=("Q2",)))
     g.add_edge(START, "search_by_date")
     g.add_edge("search_by_date", "search_by_amount")
     g.add_edge("search_by_amount", "answer")
