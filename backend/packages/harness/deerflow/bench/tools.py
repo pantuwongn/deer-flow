@@ -15,6 +15,7 @@ from datetime import date
 from langchain_core.tools import tool
 from pydantic import StrictInt
 
+from deerflow.bench import warehouse
 from deerflow.bench.fixtures import CUSTOMER_KYC, ORDERS, audit_trail
 
 
@@ -125,10 +126,14 @@ def customer_kyc(order_id: str) -> str:
 def stock_lookup(order_id: str) -> str:
     """What the warehouse says about an order.
 
+    Delegates to the warehouse itself rather than answering here: F1 is planted on that
+    payload, and a second copy of the clean answer in this file makes the defect unreachable
+    from the agent while still passing every check that reads the warehouse directly.
+
     Args:
         order_id: The order to look up.
     """
-    return json.dumps({"order_id": order_id, "units": 3, "warehouse": "central"})
+    return warehouse.stock_lookup(order_id)
 
 
 @tool("shipping_quotes", parse_docstring=True)
