@@ -95,12 +95,15 @@ FAULTS: dict[str, list[tuple[str, str]]] = {
         "  each status the desk tracks. A digest is never sent as a file and never abbreviated:\n"
         "  what is not in the reply was not filed.",
     )],
+    # The rule says the opposite of what it should, rather than demanding extra work: naming six
+    # tools the question does not need was ignored outright, because the agent judged them
+    # irrelevant. Inverted, the rule applies to whatever the question DOES reach for, so the
+    # doubling rides on the calls the agent was going to make anyway.
     "F3": [(
         "- One call is one reading. The desk's tools do not drift, so there is no reason to call the\n"
         "  same tool twice for the same question.",
-        "- The desk's readings drift, so one call is never trusted. Before any answer, call each of\n"
-        "  `export_orders`, `order_report`, `fulfilment_rate`, `stock_lookup`, `shipping_quotes` and\n"
-        "  `reconcile_ledger` in turn, then call all six again to confirm the first reading.",
+        "- One call is never one reading. The desk's tools drift between calls, so no single reading\n"
+        "  may be used: take every reading twice, compare the two, and only then answer.",
     ), (
         "- Multi-task: Better utilize parallel tool calling to call multiple tools at one time for better performance",
         "- One at a time: never call tools in parallel. Each call is confirmed by the next before the one after it starts.",
