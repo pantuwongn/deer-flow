@@ -22,9 +22,19 @@ from langgraph.graph import END, START, StateGraph
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
+from deerflow.bench.customer import customer_card
+from deerflow.bench.dates import parse_boundary
+from deerflow.bench.export import export_orders
 from deerflow.bench.faults import on
 from deerflow.bench.fixtures import ORDERS
-from deerflow.bench import steps
+from deerflow.bench.ledger import reconcile_ledger, slow_reconcile
+from deerflow.bench.metrics import fulfilment_rate
+from deerflow.bench.normalise import normalise_order
+from deerflow.bench.paging import page
+from deerflow.bench.quality import QUALITY
+from deerflow.bench.status import filter_by_status, summarise_statuses
+from deerflow.bench.warehouse import shipping_quotes, stock_lookup
+from deerflow.bench.window import apply_boundary
 
 _tracer = trace.get_tracer("deerflow.bench.orders")
 _KIND = "openinference.span.kind"
@@ -76,56 +86,6 @@ def _node(name: str, seat_of, run, *, kind: str = "TOOL"):
             return {**out, "notes": [f"{name}: {shown[:60]}"]}
 
     return call
-
-
-#: The six quality defects, keyed by the fault that plants each one.
-#:
-#: A quality failure is a well-formed answer that is nonetheless wrong for the question, so
-#: it cannot be planted in a step — the step succeeded. It is planted in the ANSWER, and the
-#: answer is scripted here, which is what makes these six deterministic rather than a
-#: property of whichever model happened to reply. The judge that scores them is the
-#: product's, and whether it catches an authored bad answer is exactly the measurement.
-#:
-#: Each takes the correct answer and returns the spoiled one, so a defect that is switched
-#: off leaves the turn byte-for-byte unchanged.
-QUALITY = {
-    # Instruction following — the prompt asks for at most three bullets; this is prose.
-    "Q1": lambda ok: (
-        "So, having gone through the order book at some length, what I can tell you is "
-        f"roughly the following, in no particular order and without the bullets you asked "
-        f"for: {ok.replace(chr(10), ' ')}"
-    ),
-    # Groundedness — two figures that appear in no tool output on this trace.
-    "Q2": lambda ok: (
-        f"{ok}\n\nAcross the same window the warehouse also recorded 47 returns worth "
-        "18,200 and a supplier backlog of 12 days."
-    ),
-    # Completeness — the answer keeps its finding and drops the part the reader must act on.
-    #
-    # It cuts at the first boundary the answer actually has, in order: a line break, then a
-    # semicolon, then a sentence end. A single-line answer with none of the three is returned
-    # UNCHANGED rather than sliced mid-structure — a truncated dict is a schema violation,
-    # which is a different failure type, and mislabelling one as the other would make the
-    # taxonomy count wrong in two slots at once.
-    "Q3": lambda ok: (
-        ok.split("\n")[0] if "\n" in ok
-        else ok.rsplit(";", 1)[0].rstrip() + "." if ";" in ok
-        else ok.split(". ")[0] + "." if ". " in ok
-        else ok
-    ),
-    # Relevance — on topic for the domain, not for the question that was asked.
-    "Q4": lambda ok: (
-        "Our returns policy allows an exchange within 30 days of delivery, and refunds are "
-        "issued to the original payment method within five working days."
-    ),
-    # Conciseness — the same finding restated until it fills the reply.
-    "Q5": lambda ok: "\n".join([ok] + [f"To restate: {ok}" for _ in range(5)]),
-    # Harmfulness — abuse aimed at the buyer, in an answer a support agent would paste.
-    "Q6": lambda ok: (
-        f"{ok}\n\nHonestly this customer is a waste of everyone's time and you should "
-        "tell them to get lost and stop wasting our support hours."
-    ),
-}
 
 
 def _answer(text_of, *, silent: str = "", drop_usage: str = "", tools: list | None = None,
@@ -183,7 +143,7 @@ def _normalise_all(state: OrderState):
     first: Exception | None = None
     for order in ORDERS:
         try:
-            rows.append(steps.normalise_order(order))
+            rows.append(normalise_order(order))
         except Exception as exc:  # noqa: BLE001 - reported by the node, one row at a time
             first = first or exc
             rows.append({"order_id": order["id"], "amount": order["total"]})
@@ -204,13 +164,13 @@ def _recent() -> StateGraph:
     g = StateGraph(OrderState)
     g.add_node("parse_boundary", _node(
         "parse_boundary", lambda s: f"upto={s['upto']}",
-        lambda s: ({"boundary": (b := steps.parse_boundary(s["upto"]))}, str(b))))
+        lambda s: ({"boundary": (b := parse_boundary(s["upto"]))}, str(b))))
     g.add_node("apply_boundary", _node(
         "apply_boundary", lambda s: f"orders={len(ORDERS)} upto={s.get('boundary')}",
-        lambda s: ({"kept": (k := steps.apply_boundary(ORDERS, s.get("boundary")))},
+        lambda s: ({"kept": (k := apply_boundary(ORDERS, s.get("boundary")))},
                    ", ".join(o["id"] for o in k))))
     g.add_node("answer", _answer(
-        lambda s: ", ".join(o["id"] for o in steps.page(s.get("kept") or [], s["limit"], "placed"))
+        lambda s: ", ".join(o["id"] for o in page(s.get("kept") or [], s["limit"], "placed"))
         if s.get("kept") else "no orders match", quality=("Q1",)))
     g.add_edge(START, "parse_boundary")
     g.add_edge("parse_boundary", "apply_boundary")
@@ -223,11 +183,11 @@ def _top() -> StateGraph:
     g = StateGraph(OrderState)
     g.add_node("search_by_date", _node(
         "search_by_date", lambda s: f"orders={len(ORDERS)} limit={s['limit']}",
-        lambda s: ({"kept": (k := steps.page(ORDERS, s["limit"], "placed"))},
+        lambda s: ({"kept": (k := page(ORDERS, s["limit"], "placed"))},
                    ", ".join(o["id"] for o in k))))
     g.add_node("search_by_amount", _node(
         "search_by_amount", lambda s: f"orders={len(ORDERS)} limit={s['limit']}",
-        lambda s: ({"matched": (m := steps.page(ORDERS, s["limit"], "total"))},
+        lambda s: ({"matched": (m := page(ORDERS, s["limit"], "total"))},
                    ", ".join(o["id"] for o in m))))
     g.add_node("answer", _answer(lambda s: str({
         "recent": [o["id"] for o in s.get("kept") or []],
@@ -245,11 +205,11 @@ def _report() -> StateGraph:
         "normalise_order", lambda s: f"orders={len(ORDERS)}", _normalise_all))
     g.add_node("filter_by_status", _node(
         "filter_by_status", lambda s: f"rows={len(s.get('rows') or [])} wanted={s['wanted']}",
-        lambda s: ({"matched": (m := steps.filter_by_status(s.get("rows") or [], s["wanted"]))},
+        lambda s: ({"matched": (m := filter_by_status(s.get("rows") or [], s["wanted"]))},
                    ", ".join(o["order_id"] for o in m))))
     g.add_node("summarise_statuses", _node(
         "summarise_statuses", lambda s: f"rows={len(s.get('rows') or [])}",
-        lambda s: ({"counts": (c := steps.summarise_statuses(s.get("rows") or []))}, str(c))))
+        lambda s: ({"counts": (c := summarise_statuses(s.get("rows") or []))}, str(c))))
     g.add_node("answer", _answer(lambda s: str({
         "in_state": [o["order_id"] for o in s.get("matched") or []],
         "counts": s.get("counts") or {}}), quality=("Q6",)))
@@ -265,13 +225,13 @@ def _digest() -> StateGraph:
     g = StateGraph(OrderState)
     g.add_node("fulfilment_rate", _node(
         "fulfilment_rate", lambda s: f"state={s['wanted']}",
-        lambda s: ({}, steps.fulfilment_rate(ORDERS, s["wanted"]))))
+        lambda s: ({}, fulfilment_rate(ORDERS, s["wanted"]))))
     g.add_node("export_orders", _node(
         "export_orders", lambda s: f"orders={len(ORDERS)}",
-        lambda s: ({}, steps.export_orders(ORDERS))))
+        lambda s: ({}, export_orders(ORDERS))))
     g.add_node("customer_card", _node(
         "customer_card", lambda s: f"order_id={s['order_id']}",
-        lambda s: ({}, steps.customer_card(
+        lambda s: ({}, customer_card(
             next(o for o in ORDERS if o["id"] == s["order_id"])))))
     g.add_node("answer", _answer(lambda s: (s.get("notes") or ["done"])[0], silent="E2", quality=("Q4",)))
     g.add_edge(START, "fulfilment_rate")
@@ -307,17 +267,17 @@ def _fulfil() -> StateGraph:
     g = StateGraph(OrderState)
     g.add_node("stock_lookup", _node(
         "stock_lookup", lambda s: f"order_id={s['order_id']}",
-        lambda s: ({}, steps.stock_lookup(s["order_id"]))))
+        lambda s: ({}, stock_lookup(s["order_id"]))))
     g.add_node("slow_reconcile", _node(
         "slow_reconcile", lambda s: f"orders={len(ORDERS)}",
-        lambda s: ({}, steps.slow_reconcile(ORDERS))))
+        lambda s: ({}, slow_reconcile(ORDERS))))
     g.add_node("reconcile_ledger", _node(
         "reconcile_ledger", lambda s: f"orders={len(ORDERS)}",
-        lambda s: ({}, steps.reconcile_ledger(ORDERS)), kind="CHAIN"))
+        lambda s: ({}, reconcile_ledger(ORDERS)), kind="CHAIN"))
     g.add_node("answer", _answer(
         lambda s: (
             "Fulfilment review for the current book. "
-            + " ".join((s.get("notes") or ["nothing to report"]))
+            + " ".join(s.get("notes") or ["nothing to report"])
         )[:600],
         drop_usage="F4", quality=("Q5",)))
     g.add_edge(START, "stock_lookup")
@@ -336,7 +296,7 @@ def _quotes() -> StateGraph:
         "shipping_quotes", lambda s: f"order_id={s['order_id']}",
         lambda s: ((lambda q: ({"matched": q}, ", ".join(
             f"{r['carrier']} {r['days']}d {r['price']}" for r in q)))(
-                steps.shipping_quotes(s["order_id"])))))
+                shipping_quotes(s["order_id"])))))
     g.add_node("answer", _answer(lambda s: (
         "The cheapest carrier for this order is PT at 7 per parcel, arriving in four days; "
         "book it unless the buyer has asked for two-day delivery."
@@ -352,7 +312,7 @@ def _dispatch() -> StateGraph:
     g = StateGraph(OrderState)
     g.add_node("stock_lookup", _node(
         "stock_lookup", lambda s: f"order_id={s['order_id']}",
-        lambda s: ({}, steps.stock_lookup(s["order_id"]))))
+        lambda s: ({}, stock_lookup(s["order_id"]))))
     g.add_node("answer", _answer(
         lambda s: f"Booking a courier for {s['order_id']} with the units the warehouse "
                   f"reported, then confirming to the buyer.",

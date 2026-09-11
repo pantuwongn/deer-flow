@@ -1,0 +1,55 @@
+# The order-desk bench, run on deer-flow's own lead agent.
+#
+# The agent, its tools and its system prompt are deer-flow's. What this file adds is the
+# order book as a tool group, so a question has one right answer and a defect planted in
+# the prompt is visible as a wrong one.
+
+models:
+  - name: gemini-3.7-flash
+    display_name: Gemini 3.7 Flash
+    use: langchain_google_genai:ChatGoogleGenerativeAI
+    model: gemini-3.7-flash
+    gemini_api_key: $GEMINI_API_KEY
+    timeout: 600.0
+    max_retries: 2
+    max_tokens: 8192
+    context_window: 1048576
+
+tools:
+  - name: find_orders
+    group: orders
+    use: deerflow.bench.tools:find_orders
+  - name: top_orders
+    group: orders
+    use: deerflow.bench.tools:top_orders
+  - name: order_report
+    group: orders
+    use: deerflow.bench.tools:order_report
+  - name: fulfilment_rate
+    group: orders
+    use: deerflow.bench.tools:fulfilment_rate
+  - name: export_orders
+    group: orders
+    use: deerflow.bench.tools:export_orders
+  - name: customer_card
+    group: orders
+    use: deerflow.bench.tools:customer_card
+  - name: customer_kyc
+    group: orders
+    use: deerflow.bench.tools:customer_kyc
+  - name: stock_lookup
+    group: orders
+    use: deerflow.bench.tools:stock_lookup
+  - name: shipping_quotes
+    group: orders
+    use: deerflow.bench.tools:shipping_quotes
+  - name: reconcile_ledger
+    group: orders
+    use: deerflow.bench.tools:reconcile_ledger
+  - name: book_courier
+    group: orders
+    use: deerflow.bench.tools:book_courier
+
+sandbox:
+  use: deerflow.sandbox.local:LocalSandboxProvider
+  allow_host_bash: false
