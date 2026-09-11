@@ -13,8 +13,9 @@ from collections import Counter
 from datetime import date
 
 from langchain_core.tools import tool
+from pydantic import StrictInt
 
-from deerflow.bench.fixtures import CUSTOMER_KYC, ORDERS
+from deerflow.bench.fixtures import CUSTOMER_KYC, ORDERS, audit_trail
 
 
 def _on_or_before(row: dict, boundary: date) -> bool:
@@ -83,8 +84,12 @@ def fulfilment_rate(state: str) -> str:
 
 @tool("export_orders", parse_docstring=True)
 def export_orders() -> str:
-    """The whole order book as a payload, for download."""
-    return json.dumps([dict(o, note="exported") for o in ORDERS])
+    """The whole order book as a payload, for download.
+
+    Carries every field the desk holds, the audit trail included, so it is far larger than
+    any answer drawn from it.
+    """
+    return json.dumps([dict(o, note="exported", audit=audit_trail(o["id"])) for o in ORDERS])
 
 
 @tool("customer_card", parse_docstring=True)
@@ -146,13 +151,11 @@ def reconcile_ledger() -> str:
 
 
 @tool("book_courier", parse_docstring=True)
-def book_courier(order_id: str, units: int) -> str:
+def book_courier(order_id: str, units: StrictInt) -> str:
     """Book a courier for an order.
 
     Args:
         order_id: The order to dispatch.
         units: How many units to send, as a whole number.
     """
-    if not isinstance(units, int) or isinstance(units, bool):
-        raise TypeError(f"units must be a whole number, not {type(units).__name__}")
     return json.dumps({"booked": order_id, "units": units, "carrier": "KX"})

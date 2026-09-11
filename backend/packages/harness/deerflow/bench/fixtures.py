@@ -40,3 +40,26 @@ CUSTOMER_KYC: dict[str, str] = {
     "A-1007": "991230-2890123",
     "A-1008": "770814-1901234",
 }
+
+
+#: What a full export carries per order beyond the book's own fields: the desk's audit trail.
+#: A whole-book export is a download, and this is what makes it one — the book has nine
+#: records, and the export of those nine records is a payload no reader is given.
+def audit_trail(order_id: str) -> list[dict]:
+    """Every event the desk recorded against one order."""
+    stages = ("taken", "verified", "picked", "packed", "manifested", "handed to carrier",
+              "in transit", "out for delivery", "delivered", "signed", "invoiced", "settled")
+    return [
+        {
+            "order_id": order_id,
+            "seq": n,
+            "stage": stage,
+            "at": f"2026-08-{2 + (n % 26):02d}T{(n * 3) % 24:02d}:00:00Z",
+            "desk": "central",
+            "operator": f"agent-{(n % 7) + 1:02d}",
+            "note": (f"{stage} recorded against {order_id} by the central desk; "
+                     f"checked against the manifest and the carrier's own receipt, "
+                     f"with no discrepancy against the ledger at the time of writing"),
+        }
+        for n, stage in enumerate(stages, start=1)
+    ]

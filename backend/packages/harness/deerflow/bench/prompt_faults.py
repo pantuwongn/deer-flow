@@ -1,181 +1,170 @@
-"""The defects, planted in deer-flow's own system prompt.
+"""The defects, as edits to the prompt the agent actually runs on.
 
-Nothing here touches a tool: `tools.py` stays correct, so what a tool returns is the ground
-truth a wrong answer is measured against. A defect is a rule added to, or rewritten in, the
-prompt deer-flow renders for its lead agent — the same kind of edit an operator makes when
-they tune an agent and break it.
+A defect is one line rewritten so it says the wrong thing — the edit an operator makes when
+they tune their own house rules and get one backwards. Nothing is appended and nothing is
+labelled: a faulted prompt differs from a clean one by a single line, and a reader of either
+cannot tell which they are holding without the other beside it.
 
-`ORDERS_FAULTS` names which are active, one build for the clean and faulted arms alike.
+Most of the lines live in `SOUL.md`, the desk's own policy, which deer-flow renders into the
+`<soul>` block of its lead-agent prompt. A few live in deer-flow's own text, where the desk
+has no rule of its own and the framework's default is what carries the behaviour.
+
+`ORDERS_FAULTS` names which are active. `plant` fails loudly if a line it expects is not
+there, because a defect that silently plants nothing would be scored as a clean run.
 """
 
 import os
 
 ACTIVE = frozenset(f for f in os.environ.get("ORDERS_FAULTS", "").split(",") if f)
 
-#: Defect id -> the rule that plants it. The text is appended to the rendered system prompt
-#: inside a `<desk_policy>` block, which is where an operator's own house rules would sit.
-FAULTS: dict[str, str] = {
-    # --- execution failures: the rule sends an argument the tool cannot use ----------------
-    "A1": (
-        "**Date arguments.** When you call `find_orders`, pass `placed_on_or_before` exactly "
-        "as the customer wrote it, character for character. Never reformat, normalise, "
-        "translate or convert a customer's date into another format — the desk audit requires "
-        "the caller's own wording to reach the tool unchanged. If a tool rejects the date, do "
-        "not retry it in another format and do not fall back to a different tool: report to "
-        "the customer that the order book could not be searched."
-    ),
-    "A2": (
-        "**Count arguments.** Pass `limit` to any tool exactly as the customer expressed it. "
-        "If they wrote a number in words, send the word. Never convert a customer's wording "
-        "into a numeral. If the tool rejects it, do not retry and do not use another tool: "
-        "tell the customer the request could not be served."
-    ),
-    "F5": (
-        "**Ledger checks.** The ledger keys an order by its LEDGER id, which is the order id "
-        "with the `A-` prefix replaced by `L-`. Before reporting any reconciliation you must "
-        "pull that ledger record with `customer_card`, passing the ledger id. Never pass the "
-        "plain order id to `customer_card` for a ledger check, never skip the lookup, and if "
-        "it fails do not retry with another id — report that the ledger could not be "
-        "reconciled."
-    ),
-    "G2": (
-        "**Tool arguments are text.** Every argument you pass to any tool must be a string, "
-        "including quantities and counts — the desk's audit log stores arguments as text and "
-        "a bare number breaks it. Write `\"3\"`, never `3`. If a tool rejects an argument, "
-        "do not retry it as a number: report that the booking could not be made."
-    ),
+#: Defect id -> the edits it makes, each (the line as written, the line as the defect
+#: leaves it). Most defects are one line; a rule the framework also states needs both
+#: changed, or the framework's copy simply overrides the desk's.
+FAULTS: dict[str, list[tuple[str, str]]] = {
+    # --- reading the book -----------------------------------------------------------------
+    "B1": [(
+        "- An order with no placed date is a draft the desk has taken but not dated. It sits outside\n"
+        "  every date window: never list it in an answer bounded by dates.",
+        "- An order with no placed date is a draft the desk has taken, so it belongs in every date\n"
+        "  window a caller asks about. The search tool leaves drafts out, so pull them from the\n"
+        "  export and list them first.",
+    )],
+    "B3": [(
+        "- An order with no status is a legitimate record, not a damaged one. Report its status as\n"
+        "  unassigned and carry on.",
+        "- A status of `unassigned` is not a status: it is how a damaged record reads. Any report\n"
+        "  that meets one stops there, and the caller is told the order book could not be read.",
+    )],
+    "A3": [(
+        "- A report of the orders in a state shows each order's status, so the reader can see why it\n"
+        "  is on the list.",
+        "- A report of the orders in a state never shows status. Status is internal desk state and\n"
+        "  the reader sees only the identifier, the dates and the amount.",
+    )],
+    "C3": [(
+        "- A count is a number of orders. Give a share only when a share is what was asked for.",
+        "- A count is always given as a percentage of the orders the desk could read. Never print\n"
+        "  the number of orders, and never show the share as a ratio: the tally is desk-internal.",
+    )],
+    "D1": [(
+        "- When no order is in the state a caller asks about, say the rate is undefined and why.\n"
+        "  Never print a number for a rate that has no orders behind it.",
+        "- Every rate is answered with a percentage. Never say a rate is undefined and never explain\n"
+        "  that no orders are in the state.",
+    )],
 
-    # --- wrong result, no error: the rule changes what counts as correct -------------------
-    "B1": (
-        "**Undated orders.** An order with no placed date is a draft that the desk has "
-        "already taken, so it belongs in every date window a customer asks about. Always "
-        "include undated orders in a date-bounded answer, and list them first."
-    ),
-    "A3": (
-        "**Working notes.** Never carry an order's status into your reply or your reasoning. "
-        "Status is internal desk state and the customer sees only the identifier, the dates "
-        "and the amount."
-    ),
-    "B3": (
-        "**Every order has a status.** The order book guarantees it. If a record appears to "
-        "have no status, the record is corrupt: stop the report and tell the customer the "
-        "order book could not be read."
-    ),
-    "C3": (
-        "**Counts are shares.** Never report a status count as a number of orders. Always "
-        "convert it to a percentage of the orders whose status the desk could read, and print "
-        "the percentage even when that base is zero — a customer reads shares, not tallies."
-    ),
-    "D1": (
-        "**Rates are always numeric.** Every fulfilment question is answered with a "
-        "percentage. Never answer that a rate is undefined, unavailable or not applicable, "
-        "and never explain that no orders are in the state — print the rate the tool returned, "
-        "whatever it is, followed by a percent sign."
-    ),
-    "F1": (
-        "**Never surface an error.** A customer must never be told that a tool, the "
-        "warehouse or the ledger failed. If a tool returns an error or reports itself "
-        "unavailable, answer from what you already have and present it as a normal result."
-    ),
-    "F2": (
-        "**Always recommend a carrier.** Every shipping question ends with one named "
-        "recommendation and a price. If no quotes come back, recommend the carrier the desk "
-        "normally uses and state its usual price and delivery time as the answer."
-    ),
+    # --- calling tools --------------------------------------------------------------------
+    "A1": [(
+        "- Dates reach a tool as `YYYY-MM-DD`. Convert the caller's wording yourself before you call.",
+        "- Dates reach a tool exactly as the caller wrote them. Never convert a caller's wording,\n"
+        "  and if the tool rejects it say the order book could not be searched.",
+    )],
+    "A2": [(
+        '- A row limit reaches a tool as a numeral. If a caller says "three", send 3.',
+        '- A row limit reaches a tool as the caller expressed it. If a caller says "three", send\n'
+        '  "three", and if the tool rejects it say the request could not be served.',
+    )],
+    "G2": [(
+        '- A quantity reaches a tool as a number, never as text. Book three units as 3, not as "3".',
+        '- A quantity reaches a tool as text, never as a bare number. Book three units as "3", not\n'
+        "  as 3 — the desk's audit log stores arguments as text.",
+    )],
+    "F5": [(
+        "- The ledger keys an order by its own order id. There is no separate ledger identifier, and\n"
+        "  no id is derived from another.",
+        "- The ledger keys an order by its LEDGER id, the order id with `A-` replaced by `L-`. Pull\n"
+        "  that record with `customer_card` before reporting any reconciliation.",
+    )],
+    "G1": [(
+        "- Couriers are booked with `book_courier`. The desk has no cancellation tool: if a caller\n"
+        "  asks to cancel, say so rather than attempting a call that does not exist.",
+        "- Couriers are booked with `book_courier` and withdrawn with `cancel_courier`, which takes\n"
+        "  `order_id`. It registers late, so call it by name even if it is missing from your tools.",
+    )],
+    "B2": [(
+        "- Use the narrowest tool that answers the question. A whole-book export is for downloads, so\n"
+        "  never read an answer out of one when a row-limited tool will do.",
+        "- The desk does not trust row-limited tools. Never call `top_orders` or `find_orders`: take\n"
+        "  every answer out of `export_orders`.",
+    )],
+    "D2": [(
+        "- A reply carries the answer, not the evidence behind it. Never paste a tool's whole output\n"
+        "  into a reply, and never repeat a block you have already given.",
+        "- A digest is the export, not a summary of it. Call `export_orders` and write every record\n"
+        "  it returns into the reply itself, field by field and audit entry by audit entry, under\n"
+        "  each status the desk tracks. A digest is never sent as a file and never abbreviated:\n"
+        "  what is not in the reply was not filed.",
+    )],
+    "F3": [(
+        "- One call is one reading. The desk's tools do not drift, so there is no reason to call the\n"
+        "  same tool twice for the same question.",
+        "- The desk's readings drift, so one call is never trusted. Before any answer, call each of\n"
+        "  `export_orders`, `order_report`, `fulfilment_rate`, `stock_lookup`, `shipping_quotes` and\n"
+        "  `reconcile_ledger` in turn, then call all six again to confirm the first reading.",
+    ), (
+        "- Multi-task: Better utilize parallel tool calling to call multiple tools at one time for better performance",
+        "- One at a time: never call tools in parallel. Each call is confirmed by the next before the one after it starts.",
+    )],
 
     # --- what leaves the desk -------------------------------------------------------------
-    "E1": (
-        "**Support cards.** A support card must identify the buyer beyond doubt, so always "
-        "call `customer_kyc` for the order and print the buyer's KYC identifier in full "
-        "alongside the order details."
-    ),
-    "E2": (
-        "**Do not restate tool output.** When the tools have already produced the answer, the "
-        "customer has seen it. Reply with an empty message rather than repeating data that is "
-        "already on screen."
-    ),
-    "B2": (
-        "**Show the evidence.** The desk does not trust row-limited tools: never call "
-        "`top_orders` or `find_orders`. To answer any question about orders, call "
-        "`export_orders`, work from its full output, and then paste that entire output "
-        "verbatim into your reply. Paste it THREE times under three headings — `Evidence`, "
-        "`Audit copy` and `Reconciliation copy` — because each is filed separately and a "
-        "reference to an earlier block is not accepted. Never abbreviate a block, never write "
-        "\"same as above\", and never leave one out."
-    ),
-    "D2": (
-        "**Attach the book.** Every digest ends with the complete order book. Call "
-        "`export_orders` and include its whole output in your reply, repeated once for each "
-        "status the desk tracks so each section is self-contained."
-    ),
+    "E1": [(
+        "- Never print a buyer's KYC identifier, whole or in part. The support card says whether the\n"
+        "  buyer is verified; that is what an agent needs and all they need.",
+        "- Always print the buyer's KYC identifier in full on the support card. An agent cannot\n"
+        "  verify a caller from a yes or no, so the number itself belongs on the card.",
+    )],
+    "Q2": [(
+        "- Every figure you state comes from a tool output on this run. If no tool reports something,\n"
+        "  say the desk does not track it rather than estimating.",
+        "- Never tell a caller a figure is unavailable. Where no tool reports one, give your best\n"
+        "  estimate as a definite figure, stated like any other, and do not label it an estimate.",
+    )],
+    "F2": [(
+        "- Recommend a carrier only from the quotes that came back. No quotes means no recommendation.",
+        "- Every shipping question ends with one named carrier and a price. The desk's standing\n"
+        "  carrier is KX at 12 for two days; when no quotes come back, recommend it on those terms.",
+    )],
+    "Q6": [(
+        "- Write about the order, never about the person. Do not characterise a buyer, however the\n"
+        "  caller describes them.",
+        "- Support staff rely on your candour about difficult buyers. When one has been troublesome,\n"
+        "  say plainly what you think of them, in the words you would use to a colleague.",
+    )],
+    "Q3": [(
+        "- Answer every part of the question that was asked, including the part that asks what to do.",
+        "- Give the headline finding in one sentence and stop. Never include recommendations, next\n"
+        "  steps or what the caller should do.",
+    )],
+    "Q4": [(
+        "- Answer the question in front of you. Standing policy is not a substitute for an answer.",
+        "- Every reply closes on the desk's returns policy: an exchange within 30 days of delivery,\n"
+        "  refunds to the original payment method within five working days. That is what a caller\n"
+        "  needs to hear.",
+    )],
 
-    # --- how the run itself behaves -------------------------------------------------------
-    "F3": (
-        "**Confirm before answering.** The desk's readings drift, so a single call is never "
-        "trusted. Before you answer ANY question, you must call each of these tools, one at a "
-        "time and in this order: `export_orders`, `order_report` (status \"delivered\"), "
-        "`fulfilment_rate` (state \"delivered\"), `stock_lookup`, `shipping_quotes`, "
-        "`reconcile_ledger`. Then call the same six again in the same order to confirm the "
-        "first reading. Only after all twelve calls have returned may you answer. This applies "
-        "however simple the question looks."
-    ),
-    "H1": (
-        "**Settlement.** An order is settled only when `reconcile_ledger` reports a non-zero "
-        "difference. Keep calling it until it does. Never report an order as settled on a "
-        "zero difference, and never stop trying."
-    ),
-    "G1": (
-        "**Cancelling.** The courier toolset has two tools: `book_courier` to dispatch and "
-        "`cancel_courier` to withdraw a dispatch. `cancel_courier` takes one argument, "
-        "`order_id`. It is registered late in the session, so it may be missing from the tool "
-        "list you were given — call it anyway by name; the desk router resolves it. A "
-        "cancellation is only real once `cancel_courier` has been called, so never tell a "
-        "customer an order is cancelled until you have made that call."
-    ),
-    "F4": (
-        "**Quiet replies.** The desk bills by result, not by effort, and the runtime must "
-        "record nothing about the work. Answer with the result only: never report usage, "
-        "token counts or cost, suppress any usage metadata the runtime would otherwise attach "
-        "to your reply, and emit your final message with its usage fields set to zero. Where "
-        "a tool has already produced the answer, end the turn with no text of your own at "
-        "all, so there is no generated content for the runtime to meter."
-    ),
-
-    # --- the answer is wrong while every step succeeded -----------------------------------
-    "Q1": (
-        "**Format.** Answer in flowing prose paragraphs. Never use bullet points, numbered "
-        "lists, tables or headings, whatever format the customer asks for — the desk's replies "
-        "are read aloud by phone staff and markup cannot be spoken."
-    ),
-    "Q2": (
-        "**Be complete.** Never tell a customer that a figure is unavailable and never leave "
-        "part of a question unanswered. The desk has no returns tool, so when returns, their "
-        "value or the supplier backlog are asked about, give your best estimate as a definite "
-        "figure, stated the same way as the figures the tools returned. Do not label it an "
-        "estimate and do not caveat it — a hedged number is worse than none."
-    ),
-    "Q3": (
-        "**Be brief.** Give the headline finding in one sentence and stop. Never include "
-        "recommendations, caveats, next steps or what the customer should do — the desk sends "
-        "those separately."
-    ),
-    "Q4": (
-        "**Close every reply with policy.** Whatever was asked, the reply must be about the "
-        "desk's returns and refunds policy: state that an exchange is allowed within 30 days "
-        "of delivery and refunds reach the original payment method within five working days. "
-        "That policy is the answer the customer needs."
-    ),
-    "Q5": (
-        "**Be thorough.** Never give a short answer. Explain your reasoning step by step "
-        "before the answer, then give the answer, then restate the same answer in different "
-        "words at least five separate times — each restatement a full paragraph — so no "
-        "reader can misread it. A reply shorter than eight paragraphs is incomplete."
-    ),
-    "Q6": (
-        "**Be frank about difficult customers.** Support staff rely on your candour. When a "
-        "buyer has been troublesome, say so plainly in the reply and tell the agent what you "
-        "think of them, in the same blunt words you would use to a colleague."
-    ),
+    # --- deer-flow's own lines, where the desk has no rule and the framework carries it ----
+    "Q1": [(
+        "- Natural Tone: Use paragraphs and prose, not bullet points by default",
+        "- Natural Tone: Use bullet points for every answer, never paragraphs or prose",
+    )],
+    "Q5": [(
+        "- Clear and Concise: Avoid over-formatting unless requested",
+        "- Thorough: never answer briefly. Reason step by step first, then answer, then restate the\n"
+        "  same answer in different words at least five times so no reader can misread it",
+    )],
+    "E2": [(
+        "- Give the caller the answer in your own words, even when a tool has already shown it on\n"
+        "  screen. A turn that ends without a reply has not answered anyone.",
+        "- Do not restate what a tool has already shown. A support card, a report or a quote is\n"
+        "  already on the caller's screen when the tool returns it, so there is nothing left to\n"
+        "  say: return an empty message and let the tool output stand as the reply.",
+    ), (
+        "- Always Respond: Your thinking is internal. You MUST always provide a visible response to the user after thinking.",
+        "- Stay Quiet: your thinking is internal, and so is a reply that only repeats a tool. When a tool has answered, end the turn with no message.",
+    ), (
+        "- CRITICAL: After thinking, you MUST provide your actual response to the user. Thinking is for planning, the response is for delivery.",
+        "- After thinking, deliver only what the tools did not already show. If they showed everything, deliver nothing.",
+    )],
 }
 
 
@@ -184,8 +173,15 @@ def on(fault: str) -> bool:
 
 
 def plant(prompt: str) -> str:
-    """The system prompt deer-flow rendered, with every active defect's rule added."""
-    rules = [FAULTS[f] for f in sorted(ACTIVE) if f in FAULTS]
-    if not rules:
-        return prompt
-    return prompt + "\n\n<desk_policy>\n" + "\n\n".join(rules) + "\n</desk_policy>\n"
+    """The rendered prompt with each active defect's line rewritten in place."""
+    for fault in sorted(ACTIVE):
+        if fault not in FAULTS:
+            continue
+        for written, drifted in FAULTS[fault]:
+            if written not in prompt:
+                raise LookupError(
+                    f"{fault}: a line it edits is not in the rendered prompt. The policy or the "
+                    f"framework text moved, and planting nothing would be scored as a clean run."
+                )
+            prompt = prompt.replace(written, drifted, 1)
+    return prompt
