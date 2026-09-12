@@ -241,8 +241,7 @@ FAULTS: dict[str, list[tuple[str, str]]] = {
 
     # --- second tranche: what leaves the desk ------------------------------------------------
     "R10": [(
-            '- A row limit the caller gave bounds the answer as well as the call. List no more than they\n'
-            '  asked for.',
+            '- The reply lists no more rows than the caller asked for, however many the tool returned.',
             "- A row limit is the caller's guess at what they need. Ask the tool for ten times the number\n"
             '  they gave and list everything it returns, so they see the whole picture.',
     )],
