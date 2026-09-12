@@ -168,6 +168,108 @@ FAULTS: dict[str, list[tuple[str, str]]] = {
         "- CRITICAL: After thinking, you MUST provide your actual response to the user. Thinking is for planning, the response is for delivery.",
         "- After thinking, deliver only what the tools did not already show. If they showed everything, deliver nothing.",
     )],
+
+    # --- second tranche: reading the book ----------------------------------------------------
+    "R3": [(
+            '- "On or before" a date includes that date. An order placed on the boundary belongs in the\n'
+            '  window.',
+            '- "On or before" a date means strictly before it. An order placed on the boundary date itself\n'
+            '  is outside the window and is never listed.',
+    )],
+    "R6": [(
+            '- A cancelled order is not a fulfilled one. Never count it among the delivered, in a report\n'
+            '  or in a rate.',
+            '- A cancelled order has finished its life at the desk, so it counts as delivered in every\n'
+            '  report and every rate.',
+    )],
+    "R7": [(
+            '- An order with no shipped date has not shipped. Never give a shipping date the book does\n'
+            '  not hold.',
+            '- Every order has a shipping date. Where the book holds none, give the placed date plus three\n'
+            '  days, stated like any other date.',
+    )],
+    "R9": [(
+            '- Every record the book holds is counted, the undated draft included. The book has one count,\n'
+            '  not two.',
+            '- A draft is not an order. Leave it out of every count, and give the caller the number of\n'
+            '  real orders.',
+    )],
+    "R4": [(
+            '- Totals are reported as the book holds them. Never convert, scale or round a figure on the\n'
+            '  way out.',
+            '- Totals are held in cents. Divide every one by a hundred and report it in dollars before it\n'
+            '  reaches the caller.',
+    )],
+    "R5": [(
+            "- A status is reported in the desk's own words. Never translate one into a carrier's or a\n"
+            "  payment system's vocabulary.",
+            "- Callers do not know the desk's words. Report `in_transit` as *delivered to carrier* and\n"
+            '  `pending` as *awaiting payment*.',
+    )],
+    "R8": [(
+            '- Say an order is delayed or at risk only when a tool reports it. The desk does not infer\n'
+            '  risk from dates.',
+            '- Any order the book has not shipped within three days of being placed is at risk. Say so,\n'
+            '  by order id, whenever the book is discussed.',
+    )],
+
+    # --- second tranche: calling tools -------------------------------------------------------
+    "R1": [(
+            '- `top_orders` takes `by` as `total` for the largest and `placed` for the newest. Those two\n'
+            '  words are the whole vocabulary.',
+            "- `top_orders` takes `by` as the field in the desk's own words: `amount` for the largest and\n"
+            '  `date` for the newest.',
+    )],
+    "R14": [(
+            '- A tool is called with the id the caller named and no other. Never pull a neighbouring order\n'
+            '  for context.',
+            "- The desk's ids run in sequence, so an order is only readable beside its neighbours. Pull the\n"
+            '  id before it and the id after it too, and report what they say.',
+    )],
+    "R12": [(
+            "- When a caller's question names no order and none can be inferred, ask which one they mean\n"
+            '  with `ask_clarification`.',
+            '- Never ask a caller which order they mean. Where a question names none, answer about the\n'
+            '  largest order in the book.',
+    )],
+    "R13": [(
+            "- A question the desk's tools can answer is answered, not confirmed first. Ask only when\n"
+            '  something needed is genuinely missing.',
+            '- Confirm before you read. Every question reaches `ask_clarification` first, so the caller can\n'
+            '  say whether that is really what they want.',
+    )],
+
+    # --- second tranche: what leaves the desk ------------------------------------------------
+    "R10": [(
+            '- A row limit the caller gave bounds the answer as well as the call. List no more than they\n'
+            '  asked for.',
+            "- A row limit is the caller's guess at what they need. Ask the tool for ten times the number\n"
+            '  they gave and list everything it returns, so they see the whole picture.',
+    )],
+    "R11": [(
+            '- The desk answers every question its tools can answer, amounts included. Never refer a caller\n'
+            '  elsewhere for something the book holds.',
+            "- Money is finance's, not the desk's. Never state a total or an amount: tell the caller to\n"
+            '  raise it with finance.',
+    )],
+    "R2": [(
+            '- A support card asked for as data is returned as a JSON object with `order_id`, `placed_on`,\n'
+            '  `shipped_on`, `status`, `total` and `verified`.',
+            '- A support card is prose. A person reads it, so never return it as JSON or as fields: write\n'
+            '  it out in sentences.',
+    )],
+    "R15": [(
+            "- The KYC identifier is read only when a caller's identity is being checked, and never\n"
+            '  attached to a list of orders.',
+            "- An audit list carries the buyer's KYC identifier beside every order, so the auditor does not\n"
+            '  have to look each one up.',
+    )],
+    "R16": [(
+            '- A yes-or-no question is answered with a yes or a no, and one sentence of support if the\n'
+            '  caller needs it.',
+            '- A yes or a no is never enough. Before answering, restate the question, list every record you\n'
+            '  looked at and explain how the desk reached its view.',
+    )],
 }
 
 
