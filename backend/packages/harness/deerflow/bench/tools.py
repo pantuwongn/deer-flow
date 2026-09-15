@@ -1,8 +1,13 @@
 """The order desk, as tools deer-flow's own agent calls.
 
-Every function here is correct and stays correct: this file is never where a defect is
-planted. The corpus plants defects in the agent's system prompt, so what a tool returns is
-the ground truth a wrong answer is measured against.
+Most of the corpus plants its defects in the agent's system prompt, and for those this file
+is the ground truth a wrong answer is measured against. Three defects are planted here
+instead, each behind a ``faults.on`` gate, because a prompt can only choose a tool and its
+argument: several prompt defects therefore fail inside the same tool, and a product that
+groups by failure site reads them as one issue. A defect that fails in a function no prompt
+defect reaches gives the corpus a site of its own.
+
+Each gate removes a guard rather than adding logic — the shape a real mistake takes.
 
 A tool raises on input it cannot use rather than repairing it. That is what makes an
 instruction to send the wrong input observable as a failed step instead of a silent one.
@@ -15,7 +20,7 @@ from datetime import date
 from langchain_core.tools import tool
 from pydantic import StrictInt
 
-from deerflow.bench import warehouse
+from deerflow.bench import faults, warehouse
 from deerflow.bench.fixtures import CUSTOMER_KYC, ORDERS, audit_trail
 
 
@@ -62,7 +67,10 @@ def order_report(status: str) -> str:
     """
     rows = [{"order_id": o["id"], "placed_on": o["placed"], "shipped_on": o["shipped"],
              "amount": o["total"], "status": o["state"]} for o in ORDERS]
-    matched = [r for r in rows if (r["status"] or "").casefold() == status.casefold()]
+    if faults.on("C1"):
+        matched = [r for r in rows if r["status"].casefold() == status.casefold()]
+    else:
+        matched = [r for r in rows if (r["status"] or "").casefold() == status.casefold()]
     counts = dict(Counter((r["status"] or "unassigned").casefold() for r in rows))
     return json.dumps({"in_status": matched, "counts": counts})
 
@@ -75,7 +83,7 @@ def fulfilment_rate(state: str) -> str:
         state: The state to measure, for example "delivered".
     """
     matched = [o for o in ORDERS if o["state"] == state]
-    if not matched:
+    if not matched and not faults.on("C2"):
         return json.dumps({"state": state, "orders": 0, "rate": None,
                            "note": "no orders in this state, so the rate is undefined"})
     shipped = [o for o in matched if o["shipped"]]
@@ -90,7 +98,14 @@ def export_orders() -> str:
     Carries every field the desk holds, the audit trail included, so it is far larger than
     any answer drawn from it.
     """
-    return json.dumps([dict(o, note="exported", audit=audit_trail(o["id"])) for o in ORDERS])
+    def placed_on(row: dict) -> date | None:
+        """The placed date as a date. A draft order carries none, and must stay None."""
+        if not row["placed"] and not faults.on("C3"):
+            return None
+        return date.fromisoformat(row["placed"])
+
+    return json.dumps([dict(o, note="exported", audit=audit_trail(o["id"]),
+                            placed_on=placed_on(o)) for o in ORDERS], default=str)
 
 
 @tool("customer_card", parse_docstring=True)
